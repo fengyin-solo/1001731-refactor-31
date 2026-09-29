@@ -65,21 +65,44 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 
-import { request } from '@/api/client'
+import { fetchJson, request } from '@/api/client'
 
 type Row = Record<string, string | number | null>
 
 const ENDPOINT = '/api/plan'
 const columns = ["计划编号", "点检对象", "点检周期", "点检项目", "计划工期", "编制人员", "审批人员", "计划状态"]
-const actions = ["提交审批", "确认批复", "作废计划"]
-const statuses = ["待编制", "待审批", "已批复", "已作废"]
-const stats = [{"label": "待审批计划", "value": 0}, {"label": "已批复计划", "value": 0}, {"label": "本月点检项", "value": 0}]
+
+type StatCard = { label: string; value: number }
+
+// 状态序列、审批动作与统计卡片均由后端统一口径接口下发，前端不再各写一份。
+const actions = ref<string[]>([])
+const statuses = ref<string[]>([])
+const stats = ref<StatCard[]>([
+  { label: "待审批计划", value: 0 },
+  { label: "已批复计划", value: 0 },
+  { label: "本月点检项", value: 0 },
+])
 
 const rows = ref<Row[]>([])
 const total = ref(0)
 const errorMessage = ref('')
 const filters = ref<Record<string, string>>({})
 const filterFields = columns.slice(0, 3)
+
+async function loadRulesAndStats() {
+  const [rulesPayload, statsPayload] = await Promise.all([
+    fetchJson<{ statuses: string[]; actions: string[] }>(`${ENDPOINT}/status-rules`),
+    fetchJson<{ cards: StatCard[] }>(`${ENDPOINT}/stats`),
+  ])
+  statuses.value = rulesPayload.statuses
+  actions.value = rulesPayload.actions
+  for (const card of statsPayload.cards) {
+    const target = stats.value.find((item) => item.label === card.label)
+    if (target) {
+      target.value = card.value
+    }
+  }
+}
 
 function resetFilters() {
   filters.value = {}
@@ -121,10 +144,24 @@ async function reload() {
     const payload = await response.json()
     rows.value = payload.items ?? []
     total.value = payload.total ?? rows.value.length
+    const statsPayload = await fetchJson<{ cards: StatCard[] }>(`${ENDPOINT}/stats`)
+    for (const card of statsPayload.cards) {
+      const target = stats.value.find((item) => item.label === card.label)
+      if (target) {
+        target.value = card.value
+      }
+    }
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '点检计划列表读取失败'
   }
 }
 
-onMounted(reload)
+onMounted(async () => {
+  try {
+    await loadRulesAndStats()
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '点检计划状态规则读取失败'
+  }
+  await reload()
+})
 </script>

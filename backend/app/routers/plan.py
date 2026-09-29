@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 
 from app.schemas import ActionResult, EntryPayload, PageResult
+from app.services import plan_rules
 from app.services.plan import PlanService
 
 router = APIRouter(prefix="/api/plan", tags=["点检计划"])
@@ -13,7 +14,31 @@ router = APIRouter(prefix="/api/plan", tags=["点检计划"])
 service = PlanService()
 
 LIST_FIELDS = ["计划编号", "点检对象", "点检周期", "点检项目", "计划工期", "编制人员", "审批人员", "计划状态"]
-STATUSES = ["待编制", "待审批", "已批复", "已作废"]
+# 列表可筛选的状态直接取状态序列，只有这一份定义。
+STATUSES = list(plan_rules.STATUS_ORDER)
+
+
+@router.get("/status-rules")
+def status_rules() -> dict[str, Any]:
+    """暴露点检计划的统一状态序列与审批动作，供前端按钮与筛选项取用。"""
+    return {
+        "statuses": list(plan_rules.STATUS_ORDER),
+        "actions": list(plan_rules.ACTION_RULES.keys()),
+        "action_targets": dict(plan_rules.ACTION_RULES),
+        "initial_status": plan_rules.INITIAL_STATUS,
+    }
+
+
+@router.get("/stats")
+def plan_stats() -> dict[str, Any]:
+    """待审/已批复统计：与列表按同一状态口径统计，数值必定对得上。"""
+    summary = service.status_summary()
+    return {
+        "cards": [
+            {"label": "待审批计划", "value": summary["待审批"], "status": plan_rules.PENDING_REVIEW_STATUS},
+            {"label": "已批复计划", "value": summary["已批复"], "status": plan_rules.APPROVED_STATUS},
+        ]
+    }
 
 
 @router.get("", response_model=PageResult[dict])
@@ -28,6 +53,13 @@ def list_entries(
         raise HTTPException(status_code=400, detail="每页最多 200 条，请缩小分页范围")
     items, total = service.list_entries(keyword=keyword, status=status, page=page, size=size)
     return PageResult(items=items, total=total, page=page, size=size)
+
+
+@router.get("/export")
+def export_entries() -> dict[str, Any]:
+    """导出点检计划清单：返回当前过滤条件下的全量数据。"""
+    items, total = service.list_entries(page=1, size=10000)
+    return {"module": "plan", "total": total, "items": items}
 
 
 @router.get("/{entry_id}", response_model=dict)
@@ -56,10 +88,3 @@ def run_action(entry_id: int, payload: EntryPayload) -> ActionResult:
     if entry is None:
         return ActionResult(ok=False, message=message)
     return ActionResult(ok=True, message=message, entry=entry)
-
-
-@router.get("/export")
-def export_entries() -> dict[str, Any]:
-    """导出点检计划清单：返回当前过滤条件下的全量数据。"""
-    items, total = service.list_entries(page=1, size=10000)
-    return {"module": "plan", "total": total, "items": items}
