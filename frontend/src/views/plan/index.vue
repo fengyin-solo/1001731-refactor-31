@@ -12,7 +12,7 @@
     </header>
 
     <div class="stat-row">
-      <article v-for="item in stats" :key="item.label" class="stat-card">
+      <article v-for="item in statCards" :key="item.label" class="stat-card">
         <span class="stat-label">{{ item.label }}</span>
         <strong class="stat-value">{{ item.value }}</strong>
       </article>
@@ -36,10 +36,10 @@
       </thead>
       <tbody>
         <tr v-for="row in rows" :key="String(row.id)">
-          <td v-for="column in columns" :key="column">{{ row[column] ?? '—' }}</td>
+          <td v-for="column in columns" :key="column">{{ displayValue(row, column) }}</td>
           <td class="row-actions">
             <button
-              v-for="action in actions"
+              v-for="action in actionsForStatus(workflowRules, String(row.status ?? ''))"
               :key="action"
               class="link"
               type="button"
@@ -65,21 +65,32 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 
-import { request } from '@/api/client'
+import { fetchJson, request } from '@/api/client'
 
-type Row = Record<string, string | number | null>
+import {
+  actionsForStatus,
+  defaultWorkflowRules,
+  type PlanStats,
+  type PlanWorkflowRules,
+} from './workflow'
+
+type Row = Record<string, string | number | boolean | null>
+type PageResult = { items: Row[]; total: number }
 
 const ENDPOINT = '/api/plan'
 const columns = ["计划编号", "点检对象", "点检周期", "点检项目", "计划工期", "编制人员", "审批人员", "计划状态"]
-const actions = ["提交审批", "确认批复", "作废计划"]
-const statuses = ["待编制", "待审批", "已批复", "已作废"]
-const stats = [{"label": "待审批计划", "value": 0}, {"label": "已批复计划", "value": 0}, {"label": "本月点检项", "value": 0}]
 
 const rows = ref<Row[]>([])
 const total = ref(0)
 const errorMessage = ref('')
 const filters = ref<Record<string, string>>({})
 const filterFields = columns.slice(0, 3)
+const workflowRules = ref<PlanWorkflowRules>(defaultWorkflowRules)
+const statCards = ref([
+  { label: "待审批计划", value: 0 },
+  { label: "已批复计划", value: 0 },
+  { label: "本月点检项", value: 0 },
+])
 
 function resetFilters() {
   filters.value = {}
@@ -92,6 +103,17 @@ function exportRows() {
 
 function openCreate() {
   errorMessage.value = '点检计划登记入口尚未接入审批流'
+}
+
+function displayValue(row: Row, column: string) {
+  if (column === '计划状态') {
+    return row[column] ?? row.status ?? '—'
+  }
+  return row[column] ?? '—'
+}
+
+async function loadWorkflowRules() {
+  workflowRules.value = await fetchJson<PlanWorkflowRules>(`${ENDPOINT}/rules`)
 }
 
 async function runAction(action: string, row: Row) {
@@ -114,17 +136,20 @@ async function reload() {
   errorMessage.value = ''
   const query = new URLSearchParams(filters.value as Record<string, string>).toString()
   try {
-    const response = await request(`${ENDPOINT}?${query}`)
-    if (!response.ok) {
-      throw new Error('点检计划列表读取失败')
-    }
-    const payload = await response.json()
-    rows.value = payload.items ?? []
-    total.value = payload.total ?? rows.value.length
+    const [listPayload, statsPayload] = await Promise.all([
+      fetchJson<PageResult>(`${ENDPOINT}?${query}`),
+      fetchJson<PlanStats>(`${ENDPOINT}/stats?${query}`),
+    ])
+    rows.value = listPayload.items ?? []
+    total.value = listPayload.total ?? rows.value.length
+    statCards.value[0].value = statsPayload.pending_approval
+    statCards.value[1].value = statsPayload.approved
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '点检计划列表读取失败'
   }
 }
 
-onMounted(reload)
+onMounted(() => {
+  void Promise.all([loadWorkflowRules().catch(() => undefined), reload()])
+})
 </script>

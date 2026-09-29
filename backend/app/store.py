@@ -7,6 +7,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.seed import SEED_ROWS
+from app.services import plan_workflow
 
 
 class Store:
@@ -31,11 +32,21 @@ class Store:
         modules: list[dict[str, object]] = []
         for name in self.module_names():
             rows = self.rows(name)
+            if name == "plan":
+                pending_count = sum(
+                    1 for row in rows if plan_workflow.is_pending_status(plan_workflow.current_status(row))
+                )
+                abnormal_count = sum(
+                    1 for row in rows if plan_workflow.is_abnormal_status(plan_workflow.current_status(row))
+                )
+            else:
+                pending_count = sum(1 for row in rows if row.get("pending"))
+                abnormal_count = sum(1 for row in rows if row.get("abnormal"))
             modules.append({
                 "name": name,
                 "created": len(rows),
-                "pending": sum(1 for row in rows if row.get("pending")),
-                "abnormal": sum(1 for row in rows if row.get("abnormal")),
+                "pending": pending_count,
+                "abnormal": abnormal_count,
             })
         cards = [
             {"label": "业务模块", "value": len(modules)},
